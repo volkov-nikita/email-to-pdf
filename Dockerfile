@@ -17,6 +17,6 @@ RUN chmod +x /app/runner.sh
 WORKDIR /app
 
 RUN poetry config virtualenvs.create false
-RUN poetry install --no-dev
+RUN poetry install --no-root
 
 ENTRYPOINT ["/app/runner.sh"]

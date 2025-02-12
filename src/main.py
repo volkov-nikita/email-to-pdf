@@ -1,273 +1,229 @@
 #!/usr/bin/env python
 
-import pdfkit
 import json
-from imap_tools import MailBox, AND, MailMessageFlags
 import os
-import smtplib
 from pathlib import Path
-from email.mime.multipart import MIMEMultipart
-from email.mime.base import MIMEBase
-from email.mime.text import MIMEText
-from email.utils import formatdate
-from email import encoders
+
+import pdfkit
+from imap_tools import MailBox, AND, MailMessageFlags
 
 
-def send_mail(
-    send_from,
-    send_to,
-    subject,
-    message,
-    files=[],
-    server=None,
-    port=None,
-    username=None,
-    password=None,
-    use_tls=None,
-):
-    """Compose and send email with provided info and attachments.
+# Constants
+OUTPUT_DIRECTORY = Path(os.environ.get("OUTPUT_DIRECTORY", "/tmp"))
+PDF_CONTENT_ERRORS = (
+    "ContentNotFoundError",
+    "ContentOperationNotPermittedError",
+    "UnknownContentError",
+    "RemoteHostClosedError",
+    "ConnectionRefusedError",
+    "Server refused a stream",
+)
+BAD_CHARACTERS = ["/", "*", ":", "<", ">", "|", '"', "’", "–"]
+DEFAULT_IMAP_TARGET_FOLDER = "Processed"
+
+# Ensure output directory exists
+OUTPUT_DIRECTORY.mkdir(parents=True, exist_ok=True)
+
+
+class EmailProcessingError(Exception):
+    """Custom exception for email processing errors."""
+    pass
+
+
+def sanitize_filename(filename: str) -> str:
+    """Sanitizes a string to be a valid filename."""
+    for char in BAD_CHARACTERS:
+        filename = filename.replace(char, "_")
+    return filename
+
+
+def get_pdfkit_options() -> dict:
+    """Retrieves and parses PDFKit options from environment variables."""
+    options_str = os.environ.get("WKHTMLTOPDF_OPTIONS")
+    return json.loads(options_str) if options_str else {}
+
+
+def get_mail_message_flag() -> tuple[str, bool]:
+    """Retrieves the mail message flag and its state (add/remove) from env."""
+    flag_str = os.environ.get("MAIL_MESSAGE_FLAG", "SEEN").upper()
+    flag_map = {
+        "ANSWERED": (MailMessageFlags.ANSWERED, True),
+        "FLAGGED": (MailMessageFlags.FLAGGED, True),
+        "UNFLAGGED": (MailMessageFlags.FLAGGED, False),
+        "DELETED": (MailMessageFlags.DELETED, True),
+        "SEEN": (MailMessageFlags.SEEN, True),
+    }
+    # Default to SEEN if not a recognized flag
+    return flag_map.get(flag_str, (MailMessageFlags.SEEN, True))
+
+
+def get_imap_filter(mail_message_flag: tuple[str, bool]) -> AND:
+    """Retrieves IMAP filter criteria from environment, or derives it."""
+    filter_criteria = os.environ.get("IMAP_FILTER")
+    if filter_criteria:
+        return filter_criteria  # User-defined filter takes precedence
+
+    flag, state = mail_message_flag
+    if flag == MailMessageFlags.SEEN:
+        return AND(seen=(not state))
+    elif flag == MailMessageFlags.ANSWERED:
+        return AND(answered=(not state))
+    elif flag == MailMessageFlags.FLAGGED:
+        return AND(flagged=(not state))
+    elif flag == MailMessageFlags.DELETED and state:
+        return AND(all=True)  # Searching for undeleted doesn't make sense
+    else:
+        raise ValueError(
+            "Could not determine IMAP filter from mail message flag. "
+            "You must specify the filter manually."
+        )
+
+
+def html_to_pdf(html_content: str, filename: str, pdfkit_options: dict) -> Path:
+    """Converts HTML content to a PDF file.
 
     Args:
-        send_from (str): from name
-        send_to (str): to name(s)
-        subject (str): message title
-        message (str): message body
-        files (list[str]): list of file paths to be attached to email
-        server (str): mail server host name
-        port (int): port number
-        username (str): server auth username
-        password (str): server auth password
-        use_tls (bool): use TLS mode
+        html_content: The HTML content to convert.
+        filename: The desired filename (without extension).
+        pdfkit_options:  Options for pdfkit.
+
+    Returns:
+        The Path to the generated PDF file.
+
+    Raises:
+        EmailProcessingError: If PDF generation fails due to content errors.
     """
-    msg = MIMEMultipart()
-    msg["From"] = send_from
-    msg["To"] = send_to
-    msg["Date"] = formatdate(localtime=True)
-    msg["Subject"] = subject
+    sanitized_filename = sanitize_filename(filename)
+    output_path = OUTPUT_DIRECTORY / f"{sanitized_filename[:50]}.pdf"
 
-    msg.attach(MIMEText(message))
-
-    for path in files:
-        part = MIMEBase("application", "octet-stream")
-        with open(path, "rb") as file:
-            part.set_payload(file.read())
-        encoders.encode_base64(part)
-        part.add_header(
-            "Content-Disposition",
-            "attachment",
-            filename=format(Path(path).name),
-        )
-        msg.attach(part)
-
-    smtp = smtplib.SMTP(server, port)
-    if use_tls:
-        smtp.starttls()
-    smtp.login(username, password)
-    smtp.sendmail(send_from, send_to, msg.as_string())
-    smtp.quit()
+    try:
+        pdfkit.from_string(
+            html_content, output_path, options=pdfkit_options
+        )  # Corrected options
+        return output_path
+    except OSError as e:
+        if any(error in str(e) for error in PDF_CONTENT_ERRORS):
+            msg = (
+                f"Error generating PDF for '{filename}'.  "
+                f"Likely content issue: {e}"
+            )
+            raise EmailProcessingError(msg) from e
+        else:
+            # Re-raise other OSErrors
+            raise
 
 
-def process_mail(
-    mark_msg=True,
-    num_emails_limit=50,
-    imap_url=None,
-    imap_username=None,
-    imap_password=None,
-    smtp_username=None,
-    smtp_password=None,
-    imap_folder=None,
-    mail_sender=None,
-    server_smtp=None,
-    smtp_tls=None,
-    smtp_port=None,
-    mail_destination=None,
-    printfailedmessage=None,
-    pdfkit_options=None,
-    mail_msg_flag=None,
-    filter_criteria=AND(seen=False),
-):
+def process_email(
+    imap_url: str,
+    imap_username: str,
+    imap_password: str,
+    imap_folder: str,
+    mail_msg_flag: tuple[str, bool],
+    filter_criteria: AND,
+    num_emails_limit: int = 50,
+    print_failed_message: bool = False,
+) -> None:
+    """Processes emails from an IMAP server, converting HTML content to PDF.
+
+    Args:
+        imap_url: IMAP server URL.
+        imap_username: IMAP username.
+        imap_password: IMAP password.
+        imap_folder: IMAP folder to process.
+        mail_msg_flag:  Tuple of (MailMessageFlag, bool) for flagging messages.
+        filter_criteria: IMAP filter criteria.
+        num_emails_limit: Maximum number of emails to process.
+        print_failed_message: Whether to print the body of failed emails.
+
+    Raises:
+        EmailProcessingError:  If an unhandled exception occurs, or if moving the processed email fails.
+    """
     print("Starting mail processing run", flush=True)
-    if printfailedmessage:
+    if print_failed_message:
         print("*On failure, the Body of the email will be printed*")
 
-    PDF_CONTENT_ERRORS = [
-        "ContentNotFoundError",
-        "ContentOperationNotPermittedError",
-        "UnknownContentError",
-        "RemoteHostClosedError",
-        "ConnectionRefusedError",
-        "Server refused a stream",
-    ]
+    pdfkit_options = get_pdfkit_options()
+    target_folder = os.environ.get("IMAP_TARGET_FOLDER", DEFAULT_IMAP_TARGET_FOLDER)
 
-    with MailBox(imap_url).login(imap_username, imap_password, imap_folder) as mailbox:
-        for i, msg in enumerate(
-            mailbox.fetch(
-                criteria=filter_criteria,
-                limit=num_emails_limit,
-                mark_seen=False,
-            )
-        ):
-            if len(msg.attachments) == 0:
-                print(f"\nNo attachments in: {msg.subject}")
-                if not msg.html.strip() == "":  # handle text only emails
-                    pdftext = (
-                        '<meta http-equiv="Content-type" content="text/html; charset=utf-8"/>'
-                        + msg.html
-                    )
-                else:
-                    pdftext = msg.text
-                filename = f'{msg.subject.replace(".", "_").replace(" ", "-")[:50]}.pdf'
-                print(f"\nPDF: {filename}")
-                for bad_char in ["/", "*", ":", "<", ">", "|", '"', "’", "–"]:
-                    filename = filename.replace(bad_char, "_")
-                print(f"\nPDF: {filename}")
-                options = {}
-                if pdfkit_options is not None:
-                    # parse WKHTMLTOPDF Options to dict
-                    options = json.loads(pdfkit_options)
-                try:
-                    pdfkit.from_string(pdftext, filename, options=options)
-                except OSError as e:
-                    if any([error in str(e) for error in PDF_CONTENT_ERRORS]):
-                        # allow pdfs with missing images if file got created
-                        if os.path.exists(filename):
-                            if printfailedmessage:
-                                print(f"\n{pdftext}\n")
-                            print(f"\n **** HANDLED EXCEPTION ****")
-                            print(f"\n\n{str(e)}\n")
-                            print(
-                                f"\nError with images in file, continuing without them.  Email Body/HTML Above"
-                            )
+    try:
+        with MailBox(imap_url).login(
+            imap_username, imap_password, imap_folder
+        ) as mailbox:
+            for msg in mailbox.fetch(
+                criteria=filter_criteria, limit=num_emails_limit, mark_seen=False
+            ):
+                if msg.attachments:
+                    # Skip emails that contain attachments
+                    continue
 
-                        else:
-                            if printfailedmessage:
-                                print(f"\n{pdftext}\n")
-                            print(
-                                f"\n !!!! UNHANDLED EXCEPTION with PDF Content Errors: {PDF_CONTENT_ERRORS} !!!!"
-                            )
-                            print(f"\n{str(e)}")
-                            print(f"\nBody/HTML Above")
-                            raise e
-                    else:
-                        if printfailedmessage:
-                            print(f"\n{pdftext}\n")
-                        print(f"\n !!!! UNHANDLED EXCEPTION !!!!")
-                        print(f"\n{str(e)}")
-                        print(f"\nBody/HTML Above")
-                        raise e
-
-                send_mail(
-                    mail_sender,
-                    mail_destination,
-                    f"{msg.subject}",
-                    f"Converted PDF of email from {msg.from_} on {msg.date_str} wih topic {msg.subject}. Content below.\n\n\n\n{msg.text}",
-                    files=[filename],
-                    server=server_smtp,
-                    username=smtp_username,
-                    password=smtp_password,
-                    port=smtp_port,
-                    use_tls=smtp_tls,
+                print(f"\nProcessing: {msg.subject}")
+                pdf_content = (
+                    '<meta http-equiv="Content-type" content="text/html; charset=utf-8"/>'
+                    + msg.html
+                    if msg.html.strip()
+                    else msg.text
                 )
 
-                if (
-                    mark_msg
-                    and mail_msg_flag
-                    and mail_msg_flag[0] in MailMessageFlags.all
-                ):
+                try:
+                    output_path = html_to_pdf(
+                        pdf_content, msg.subject, pdfkit_options
+                    )
+                    print(f"Saved PDF: {output_path}")
+                except EmailProcessingError as e:
+                    print(f"\n**** HANDLED EXCEPTION ****\n{e}")
+                    if print_failed_message:
+                        print(f"\n{pdf_content}\n")
+                    continue  # Continue to the next email
+                except Exception as e:
+                    print(f"\n!!!! UNHANDLED EXCEPTION !!!!\n{e}")
+                    if print_failed_message:
+                        print(f"\n{pdf_content}\n")
+                    raise EmailProcessingError("Unhandled exception during PDF creation") from e
+
+                if mail_msg_flag and mail_msg_flag[0] in MailMessageFlags.all:
                     mailbox.flag(msg.uid, mail_msg_flag[0], mail_msg_flag[1])
-                os.remove(filename)
-    print("Completed mail processing run\n\n", flush=True)
+                try:
+                    mailbox.move(msg.uid, target_folder)
+                    print(f"Moved email '{msg.subject}' to folder '{target_folder}'.")
+                except Exception as e:
+                    raise EmailProcessingError(f"Failed to move email '{msg.subject}' to folder '{target_folder}': {e}")
 
 
-def _get_mail_message_flag():
-    """Determine mail message flag to set on processed emails from environment variable.
+    except Exception as e: # Catch any other exception during the IMAP connection
+        raise EmailProcessingError(f"An error occurred during IMAP processing: {e}")
 
-    Only valid options are "ANSWERED", "FLAGGED", "UNFLAGGED", "DELETED" and "SEEN". Any other values will default to "SEEN".
-
-    DRAFT flag is excluded as it can cause strange behaviour with inbound mail becoming outbound.
-    RECENT flag is excluded as it is read-only
-
-    Returns a tuple. The first part is the flag and the second is if it should be added (True) or removed (False).
-    """
-    mail_message_flag = os.environ.get("MAIL_MESSAGE_FLAG", "SEEN").upper()
-    if mail_message_flag == "ANSWERED":
-        return (MailMessageFlags.ANSWERED, True)
-    elif mail_message_flag == "FLAGGED":
-        return (MailMessageFlags.FLAGGED, True)
-    elif mail_message_flag == "UNFLAGGED":
-        return (MailMessageFlags.FLAGGED, False)
-    elif mail_message_flag == "DELETED":
-        return (MailMessageFlags.DELETED, True)
-    else:
-        return (MailMessageFlags.SEEN, True)
+    print("FIN Completed mail processing run\n\n", flush=True)
 
 
-def _get_imap_filter(mail_message_flag):
-    """Determine mail message filter to apply when searching for mail from environment variable.
+def main():
+    """Main function to drive the email processing."""
+    imap_url = os.environ.get("IMAP_URL")
+    imap_username = os.environ.get("IMAP_USERNAME")
+    imap_password = os.environ.get("IMAP_PASSWORD")
+    imap_folder = os.environ.get("IMAP_FOLDER")
+    print_failed_message = os.environ.get("PRINT_FAILED_MSG", "False") == "True"
 
-    If no environment variable is provided, a suitable value is determined from the mail message flag.
-    If no suitable value can be determined, an error is raised.
-    """
-    raw_filter_criteria = os.environ.get("IMAP_FILTER")
-    if raw_filter_criteria:
-        return raw_filter_criteria
-
-    # No value specified so generate a default from the message flag
-    if mail_message_flag[0] == MailMessageFlags.SEEN:
-        return AND(seen=(not mail_message_flag[1]))
-    elif mail_message_flag[0] == MailMessageFlags.ANSWERED:
-        return AND(answered=(not mail_message_flag[1]))
-    elif mail_message_flag[0] == MailMessageFlags.FLAGGED:
-        return AND(flagged=(not mail_message_flag[1]))
-    elif mail_message_flag[0] == MailMessageFlags.DELETED and mail_message_flag[1]:
-        # Search for undeleted while possible doesn't make sense
-        # so just search for all
-        return AND(all=True)
-    else:
-        # Can't determine an appropriate value so make the user supply one
-        raise ValueError(
-            "Could not determine IMAP filter from mail message flag. You must specify the filter manually."
-        )
-
-
-if __name__ == "__main__":
-
-    server_imap = os.environ.get("IMAP_URL")
-    username = os.environ.get("IMAP_USERNAME")
-    password = os.environ.get("IMAP_PASSWORD")
-    folder = os.environ.get("IMAP_FOLDER")
-
-    smtp_username = os.environ.get("SMTP_USERNAME", username)
-    smtp_password = os.environ.get("SMTP_PASSWORD", password)
-
-    server_smtp = os.environ.get("SMTP_URL")
-    sender = os.environ.get("MAIL_SENDER")
-    destination = os.environ.get("MAIL_DESTINATION")
-    smtp_port = os.getenv("SMTP_PORT", 587)
-    smtp_tls = os.getenv("SMTP_TLS", True)
-
-    printfailedmessage = os.getenv("PRINT_FAILED_MSG", "False") == "True"
-    pdfkit_options = os.environ.get("WKHTMLTOPDF_OPTIONS")
-    mail_msg_flag = _get_mail_message_flag()
-
-    filter_criteria = _get_imap_filter(mail_msg_flag)
+    mail_msg_flag = get_mail_message_flag()
+    filter_criteria = get_imap_filter(mail_msg_flag)
 
     print("Running emails-html-to-pdf")
 
-    process_mail(
-        imap_url=server_imap,
-        imap_username=username,
-        imap_password=password,
-        imap_folder=folder,
-        mail_sender=sender,
-        mail_destination=destination,
-        server_smtp=server_smtp,
-        printfailedmessage=printfailedmessage,
-        pdfkit_options=pdfkit_options,
-        smtp_tls=smtp_tls,
-        smtp_port=smtp_port,
-        smtp_username=smtp_username,
-        smtp_password=smtp_password,
-        mail_msg_flag=mail_msg_flag,
-        filter_criteria=filter_criteria,
-    )
+    try:
+        process_email(
+            imap_url=imap_url,
+            imap_username=imap_username,
+            imap_password=imap_password,
+            imap_folder=imap_folder,
+            mail_msg_flag=mail_msg_flag,
+            filter_criteria=filter_criteria,
+            print_failed_message=print_failed_message,
+        )
+    except EmailProcessingError as e:
+        print(f"Error during email processing: {e}")
+    except ValueError as e:
+        print(f"Configuration error: {e}")
+    except Exception as e:  # Catch-all for unexpected errors.
+        print(f"An unexpected error occurred: {e}")
+
+if __name__ == "__main__":
+    main()
