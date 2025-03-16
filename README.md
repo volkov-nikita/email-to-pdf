@@ -26,8 +26,8 @@ MailToPDF is a Docker-based application that automatically fetches emails from a
 1.  **Clone the Repository:**
 
     ```bash
-    git clone <your_repository_url>
-    cd <your_repository_name>
+    git clone https://github.com/volkov-nikita/email-to-pdf
+    cd email-to-pdf
     ```
 
 2.  **Create `.env` File:**
