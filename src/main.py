@@ -3,6 +3,10 @@
 import json
 import os
 from pathlib import Path
+import warnings
+
+# Suppress specific warnings
+warnings.filterwarnings("ignore", category=SyntaxWarning, message='"is" with a literal')
 
 import pdfkit
 from imap_tools import MailBox, AND, MailMessageFlags

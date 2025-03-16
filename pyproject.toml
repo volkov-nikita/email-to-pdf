@@ -1,7 +1,7 @@
 [tool.poetry]
-name = "emails-html-to-pdf"
+name = "emails-to-pdf"
 version = "0.1.0"
-description = "Convert emails to pdf then send them back"
+description = "Convert emails to pdf and save them to specified directory"
 authors = ["Robert Luke <mail@robertluke.net>"]
 
 [tool.poetry.dependencies]
@@ -9,7 +9,7 @@ python = "^3.9"
 pdfkit = "^0.6.1"
 imap-tools = "^0.46.0"
 
-[tool.poetry.dev-dependencies]
+[tool.poetry.group.dev.dependencies]
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]

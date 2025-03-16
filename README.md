@@ -1,113 +1,108 @@
-# Email to PDF to email
+# MailToPDF - Automatically Convert Emails to PDFs
 
-This script will check an imap folder for unread emails.
-Any unread email that does not have an attachment will be converted to a pdf
-and then emailed to the address you specify.
-The script is run at a configurable interval.
+[![Build Status](https://img.shields.io/badge/build-passing-brightgreen)](optional_link_to_build_status)  <!-- Optional: Add a build status badge if you have CI/CD -->
 
-This was built to integrate with [paperless-ng](https://github.com/jonaswinkler/paperless-ng) 
-which works with pdf attachements.
-However, I get many documents that are html only, so I wanted them converted
-to pdf for storage in paperless-ng.
+MailToPDF is a Docker-based application that automatically fetches emails from an IMAP server, converts them to PDF documents, and saves them to a specified directory. This is useful for archiving, reporting, or any scenario where you need to convert email content into a portable, printable format.
 
+## Features
 
-## Usage
+*   **Automated Email Fetching:** Connects to an IMAP server and retrieves emails from a specified folder.
+*   **PDF Conversion:** Converts email content (including HTML) to PDF using `wkhtmltopdf`.
+*   **Configurable:** All settings, including IMAP credentials, folder names, and conversion options, are configurable via environment variables.
+*   **Scheduled Processing:** Runs at regular intervals (configurable).
+*   **Processed Folder:** Moves processed emails to a designated "Processed" folder on the IMAP server.
+*   **Error Handling:**  Handles potential errors during email fetching and conversion.  Option to print detailed messages for failed conversions.
+* **Host Blocking:** Allows specification of hosts to block.
+* **Dockerized:**  Runs within a Docker container for easy deployment and portability.
 
-The following parameters are used (defaults in parentheses):
+## Prerequisites
 
-* `IMAP_URL` 
-* `IMAP_USERNAME`
-* `IMAP_PASSWORD`
-* `SMTP_USERNAME` (optional) uses imap username if not provided
-* `SMTP_PASSWORD` (optional) uses imap password if not provided
-* `IMAP_FOLDER` Which folder to watch for unread emails
-* `SMTP_URL`
-* `MAIL_SENDER`: Address the mail with pdf should be sent from
-* `MAIL_DESTINATION`: Where to send the resulting pdf
-* `SMTP_PORT`: (587)
-* `SMTP_TLS`: (True)
-* `INTER_RUN_INTERVAL`: Time in seconds that the system should wait between running the script
-* `PRINT_FAILED_MSG`: Flag to control printing of error messages
-* `HOSTS`: [Semicolon separated list of hosts](https://github.com/rob-luke/emails-html-to-pdf/pull/12) that should be added to /etc/hosts to prevent dns lookup failures 
-* `WKHTMLTOPDF_OPTIONS`: Python dict (json) representation of wkhtmltopdf_options that can be passed to the used pdfkit library
-* `MAIL_MESSAGE_FLAG`: Flag to apply to email after processing.  
-    Must be one of: SEEN (default), ANSWERED, FLAGGED, UNFLAGGED, DELETED
-* `IMAP_FILTER`: Criteria to use when searching for mail to be processed.
-    If no value is provided, a suitable value is determined based on the `MAIL_MESSAGE_FLAG`.
-    See [imap-tools search criteria documentation](https://pypi.org/project/imap-tools/#search-criteria) for how to specify the filter.
-    This should be in the text format (e.g. `(TEXT "hello" NEW)` rather than `AND(text="hello", new=True)`)
+*   **Docker:** You need to have Docker installed and running on your system.  [Get Docker](https://www.docker.com/get-started)
+*   **Docker Compose:**  Docker Compose is also required. It usually comes bundled with Docker Desktop.
+* **IMAP Access:** You need an email account with IMAP access enabled. For Gmail, you'll likely need to create an "App Password" since this application uses a password-based login.  *Do not use your regular Gmail password.*
 
-### Docker-Compose
+## Getting Started
 
-#### 1. Use prebuilt image
+1.  **Clone the Repository:**
 
-This image is stored in the github registry, so you can use it without downloading this code repository.
-The image address is `ghcr.io/rob-luke/emails-html-to-pdf:latest`.
-So to use it in a docker-compose it would be something like...
+    ```bash
+    git clone <your_repository_url>
+    cd <your_repository_name>
+    ```
 
-```yaml
-version: "3.8"
+2.  **Create `.env` File:**
 
-services:
+    Create a file named `.env` in the project's root directory (same directory as `docker-compose.yml`). This file will contain your sensitive configuration.
 
-  email2pdf:
-    image: ghcr.io/rob-luke/emails-html-to-pdf:latest
-    container_name: email2pdf
-    environment:
-      - IMAP_URL=imap.provider.com
-      - IMAP_USERNAME=user@provider.net
-      - IMAP_PASSWORD=randompassword
-      - IMAP_FOLDER=Paperless
-      - SMTP_URL=smtp.provider.com
-      - MAIL_SENDER=user+paperless@provider.net
-      - MAIL_DESTINATION=user+paperless@provider.net
-      - INTER_RUN_INTERVAL=600
-      - HOSTS=127.0.0.1 tracking.paypal.com
-      - WKHTMLTOPDF_OPTIONS={"load-media-error-handling":"ignore"}
-```
+    ```bash
+    cp .env.example .env
+    ```
+    Now, open the `.env` file with a text editor and fill in your actual credentials and settings:
 
+    ```dotenv
+    IMAP_URL=imap.gmail.com  # Your IMAP server address
+    IMAP_USERNAME=nvolkov96@googlemail.com  # Your email address
+    IMAP_PASSWORD=febf_adlv_gepp_xrvd  # Your App Password (or email password)
+    IMAP_FOLDER=DOCKER         # The folder to fetch emails from
+    IMAP_TARGET_FOLDER=DOCKER/Processed # Where to move processed emails
+    INTER_RUN_INTERVAL=10       # Interval in seconds between runs
+    PRINT_FAILED_MSG=true      # Print detailed error messages for failed conversions
+    HOSTS=127.0.0.1 tracking.paypal.com # Space-separated list of hosts to block
+    WKHTMLTOPDF_OPTIONS={"load-media-error-handling":"ignore"}  # JSON object for wkhtmltopdf options
+    OUTPUT_DIRECTORY=/data/pdfs    # Directory where PDFs will be saved (inside the container)
+    ```
 
-#### 2. Build image yourself
+    **IMPORTANT:**
+    *   Replace the placeholder values with your actual credentials.
+    *   For Gmail, generate an App Password (search "Gmail App Password" for instructions).
+    *   Do *not* commit the `.env` file to your repository! It contains sensitive information. It's already included in the `.gitignore`.
 
-Open the docker-compose file and enter your details in the environment.
-This will run the script every minute.
+3.  **Build and Run the Container:**
 
-```bash
-docker-compose up -d
-```
+    ```bash
+    docker-compose up -d
+    ```
 
-### Python
+    This command will:
+    *   Build the Docker image (if it doesn't exist).
+    *   Create and start the container in detached mode (`-d`).
+    *   Use the settings from your `.env` file.
 
-Or if you prefer you can run the script manually by running these commands.
+4.  **Check Logs:**
 
-```bash
-poetry install
-poetry run src/main.py
-```
+    To see the output and logs of the application:
 
-## Hints
+    ```bash
+    docker-compose logs -f mailtopdf
+    ```
+    The `-f` flag follows the log output, similar to `tail -f`.
 
-### Possible Errors
+5.  **Stop the Container:**
 
-#### PayPal Mail with HostNotFoundErrors
-* try adding `127.0.0.1 tracking.paypal.com` to the `HOSTS` env (check for missing domain in error log)
-* add `{"load-media-error-handling":"ignore"}` as `WKHTMLTOPDF_OPTIONS` option (could be the tracking pixel that is not beeing loaded
-* append `"enable-local-file-access":true` or `"load-error-handling":"ignore"`to `WKHTMLTOPDF_OPTIONS` if you get a `file://...` error
-* add `127.0.0.1 true` to the `HOSTS` env if you get a `http:///true/...` error
+    ```bash
+    docker-compose down
+    ```
 
-## Development
+## Configuration
 
-The recommended editor for development is either IntelliJ or Visual Studio Code
+All configuration is done through environment variables in the `.env` file. Here's a breakdown of each variable:
 
-### Visual Studio Code
+| Variable Name        | Description                                                                   | Default Value |
+|----------------------|-------------------------------------------------------------------------------|---------------|
+| `IMAP_URL`           | The URL of your IMAP server.                                                   |               |
+| `IMAP_USERNAME`      | Your email username (usually your full email address).                      |               |
+| `IMAP_PASSWORD`      | Your email password (or App Password for Gmail).                              |               |
+| `IMAP_FOLDER`        | The IMAP folder to fetch emails from.                                         | `Inbox`       |
+| `IMAP_TARGET_FOLDER` | The IMAP folder to move processed emails to.                                  | `Processed`   |
+| `INTER_RUN_INTERVAL` | The time interval (in seconds) between each run of the email processing.   | `60`          |
+| `PRINT_FAILED_MSG` | Whether to print detailed error messages for failed conversions (`true` or `false`). | `false` |
+| `HOSTS` | A space-separated list of hosts which will be mapped to 127.0.0.1| `127.0.0.1`          |
+| `WKHTMLTOPDF_OPTIONS` | A JSON object containing options for `wkhtmltopdf`. See [wkhtmltopdf documentation](https://wkhtmltopdf.org/usage/wkhtmltopdf.txt) for details.  | `{}`        |
+| `OUTPUT_DIRECTORY`   | The directory inside the container where PDFs will be saved.                 | `/data/pdfs`  |
 
-For Visual Studio Code, it is recommended to use the devcontainer included in the repository. With the
-[Remote - Containers](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers)
-extension installed, you should be prompted to open the devcontainer when opening the folder.
+**Example `WKHTMLTOPDF_OPTIONS`:**
 
-For debugging, copy the `env.example` file and rename it to just `env`. Then edit the variables inside
-to the required values for testing. These will be automatically configured when launching via either the
-debug menu or by pressing F5. The `env` file is included in the gitignore.
+To disable JavaScript execution and set a page size of A4:
 
-Formatting issues will cause the github build to fail. To fix formatting issues in your script, open the file
-and run the "Format Document" command.
+```json
+{"disable-javascript": true, "page-size": "A4"}
