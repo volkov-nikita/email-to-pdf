@@ -35,9 +35,9 @@ MailToPDF is a Docker-based application that automatically fetches emails from a
     Create a file named `.env` in the project's root directory (same directory as `docker-compose.yml`). This file will contain your sensitive configuration.
 
     ```bash
-    cp .env.example .env
+    cp env.example env
     ```
-    Now, open the `.env` file with a text editor and fill in your actual credentials and settings:
+    Now, open the `env` file with a text editor and fill in your actual credentials and settings:
 
     ```dotenv
     IMAP_URL=imap.gmail.com  # Your IMAP server address
@@ -55,7 +55,7 @@ MailToPDF is a Docker-based application that automatically fetches emails from a
     **IMPORTANT:**
     *   Replace the placeholder values with your actual credentials.
     *   For Gmail, generate an App Password (search "Gmail App Password" for instructions).
-    *   Do *not* commit the `.env` file to your repository! It contains sensitive information. It's already included in the `.gitignore`.
+    *   Do *not* commit the `env` file to your repository! It contains sensitive information. It's already included in the `.gitignore`.
 
 3.  **Build and Run the Container:**
 
