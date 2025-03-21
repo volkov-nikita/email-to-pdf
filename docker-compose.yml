@@ -7,5 +7,5 @@ services:
     env_file:
       - env
     volumes:
-      - ./save:/data/pdf
+      - ${OUTPUT_DIRECTORY:-./save}:/data/pdf
     restart: always

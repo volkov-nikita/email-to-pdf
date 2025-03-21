@@ -13,7 +13,7 @@ from imap_tools import MailBox, AND, MailMessageFlags
 
 
 # Constants
-OUTPUT_DIRECTORY = Path(os.environ.get("OUTPUT_DIRECTORY", "/tmp"))
+OUTPUT_DIRECTORY = Path(os.environ.get("OUTPUT_DIRECTORY", "./save"))
 PDF_CONTENT_ERRORS = (
     "ContentNotFoundError",
     "ContentOperationNotPermittedError",

@@ -42,7 +42,7 @@ MailToPDF is a Docker-based application that automatically fetches emails from a
     ```dotenv
     IMAP_URL=imap.gmail.com  # Your IMAP server address
     IMAP_USERNAME=name@mail.com  # Your email address
-    IMAP_PASSWORD=passowrd  # Your App Password (or email password)
+    IMAP_PASSWORD=password  # Your App Password (or email password)
     IMAP_FOLDER=PDF  # The folder to fetch emails from
     IMAP_TARGET_FOLDER=PDF/Processed # Where to move processed emails
     INTER_RUN_INTERVAL=600   # Interval in seconds between runs
